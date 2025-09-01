@@ -27,5 +27,7 @@ func main() {
 
 	log.Printf("Listening on port %s", port)
 
-	srv.ListenAndServe()
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
