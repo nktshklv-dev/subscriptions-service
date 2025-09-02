@@ -6,14 +6,24 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"subscriptions-service/internal/config"
+	"syscall"
 	"time"
 )
 
 func main() {
 
+	cfg, err := config.Load()
+	if err != nil {
+		os.Stderr.WriteString("CONFIG LOAD ERROR - " + err.Error() + "\n")
+		os.Exit(1)
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level:     parseLevel(cfg.LogLevel),
+		AddSource: true,
 	}))
+
 	slog.SetDefault(logger)
 	logger.Info("starting server")
 
@@ -23,14 +33,8 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	port := os.Getenv("APP_PORT")
-
-	if port == "" {
-		port = "8080"
-	}
-
 	srv := &http.Server{
-		Addr:              ":" + port,
+		Addr:              cfg.AppAddr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -48,8 +52,9 @@ func main() {
 	}()
 
 	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+	logger.Info("shutdown signal received")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -58,5 +63,20 @@ func main() {
 		logger.Error("graceful shutdown error ", err)
 	} else {
 		logger.Info("server stopped")
+	}
+}
+
+func parseLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "err", "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
 	}
 }
