@@ -6,16 +6,21 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"subscriptions-service/internal/config"
+	"strings"
 	"syscall"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"subscriptions-service/internal/config"
+	"subscriptions-service/internal/data"
+	"subscriptions-service/internal/subscriptions"
 )
 
 func main() {
-
 	cfg, err := config.Load()
 	if err != nil {
-		os.Stderr.WriteString("CONFIG LOAD ERROR - " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString("config load error: " + err.Error() + "\n")
 		os.Exit(1)
 	}
 
@@ -23,15 +28,46 @@ func main() {
 		Level:     parseLevel(cfg.LogLevel),
 		AddSource: true,
 	}))
-
 	slog.SetDefault(logger)
-	logger.Info("starting server")
+
+	db, err := data.NewDB(cfg.ConnString(), 10, 5, 30*time.Minute)
+	if err != nil {
+		logger.Error("db open failed", "err", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	{
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := db.PingContext(ctx); err != nil {
+			logger.Error("db ping failed", "err", err)
+			os.Exit(1)
+		}
+		logger.Info("db connected")
+	}
+
+	repo := subscriptions.NewRepository(db)
+	subHandler := subscriptions.NewHandler(repo, logger)
 
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/health/db", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
+		defer cancel()
+		if err := db.PingContext(ctx); err != nil {
+			http.Error(w, "db: down", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("db: ok"))
+	})
+	mux.Handle("/openapi.yaml", http.FileServer(http.Dir(".")))
+	mux.Handle("/docs/", http.StripPrefix("/docs/", http.FileServer(http.Dir("./swagger-ui"))))
+	subHandler.RegisterMux(mux)
 
 	srv := &http.Server{
 		Addr:              cfg.AppAddr,
@@ -42,39 +78,39 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	go func() {
-		logger.Info("listening ", srv.Addr)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
+	go func() {
+		logger.Info("starting server", "addr", cfg.AppAddr, "log_level", cfg.LogLevel)
+		logger.Info("listening", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("server error ", err)
+			logger.Error("server error", "err", err)
 			os.Exit(1)
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
+	<-ctx.Done()
 	logger.Info("shutdown signal received")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
-
-	if err := srv.Shutdown(ctx); err != nil {
-		logger.Error("graceful shutdown error ", err)
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		logger.Error("graceful shutdown failed", "err", err)
 	} else {
 		logger.Info("server stopped")
 	}
 }
 
-func parseLevel(level string) slog.Level {
-	switch level {
+func parseLevel(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "debug":
 		return slog.LevelDebug
 	case "info":
 		return slog.LevelInfo
 	case "warn", "warning":
 		return slog.LevelWarn
-	case "err", "error":
+	case "error", "err":
 		return slog.LevelError
 	default:
 		return slog.LevelInfo

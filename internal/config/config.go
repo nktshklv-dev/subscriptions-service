@@ -3,8 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -12,58 +10,57 @@ type Config struct {
 	AppAddr         string
 	LogLevel        string
 	ShutdownTimeout time.Duration
-	DBHost          string
-	DBPort          int
-	DBUser          string
-	DBPassword      string
-	DBName          string
-	DBSSLMode       string
+
+	DBHost string
+	DBPort string
+	DBUser string
+	DBPass string
+	DBName string
+	DBSSL  string
 }
 
-func env(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
+func Load() (Config, error) {
+	cfg := Config{
+		AppAddr:         getEnv("APP_ADDR", ":8080"),
+		LogLevel:        getEnv("APP_LOG_LEVEL", "debug"),
+		ShutdownTimeout: getDuration("APP_SHUTDOWN_TIMEOUT", 5*time.Second),
+
+		DBHost: getEnv("DB_HOST", "localhost"),
+		DBPort: getEnv("DB_PORT", "5432"),
+		DBUser: getEnv("DB_USER", "postgres"),
+		DBPass: getEnv("DB_PASSWORD", "postgres"),
+		DBName: getEnv("DB_NAME", "subscriptions"),
+		DBSSL:  getEnv("DB_SSLMODE", "disable"),
+	}
+
+	return cfg, nil
+}
+
+func (c Config) ConnString() string {
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		c.DBHost,
+		c.DBPort,
+		c.DBUser,
+		c.DBPass,
+		c.DBName,
+		c.DBSSL,
+	)
+}
+
+func getEnv(key, def string) string {
+	if val := os.Getenv(key); val != "" {
+		return val
 	}
 	return def
 }
 
-func Load() (Config, error) {
-	port, _ := strconv.Atoi(env("DB_PORT", "5432"))
-	timeout, _ := time.ParseDuration(env("APP_SHUTDOWN_TIMEOUT", "5s"))
-
-	cfg := Config{
-		AppAddr:         env("APP_ADDR", ":8080"),
-		LogLevel:        env("LOG_LEVEL", "info"),
-		ShutdownTimeout: timeout,
-		DBHost:          env("DB_HOST", "localhost"),
-		DBPort:          port,
-		DBUser:          env("DB_USER", ""),
-		DBPassword:      env("DB_PASSWORD", ""),
-		DBName:          env("DB_NAME", ""),
-		DBSSLMode:       env("DB_SSL_MODE", "disable"),
+func getDuration(key string, def time.Duration) time.Duration {
+	if val := os.Getenv(key); val != "" {
+		d, err := time.ParseDuration(val)
+		if err == nil {
+			return d
+		}
 	}
-
-	missing := []string{}
-
-	if cfg.DBHost == "" {
-		missing = append(missing, "DB_HOST")
-	}
-	if cfg.DBPort == 0 {
-		missing = append(missing, "DB_PORT")
-	}
-	if cfg.DBUser == "" {
-		missing = append(missing, "DB_USER")
-	}
-	if cfg.DBPassword == "" {
-		missing = append(missing, "DB_PASSWORD")
-	}
-	if cfg.DBName == "" {
-		missing = append(missing, "DB_NAME")
-	}
-
-	if len(missing) > 0 {
-		return Config{}, fmt.Errorf("missing required env variables:\n%s", strings.Join(missing, ",\n"))
-	}
-
-	return cfg, nil
+	return def
 }
