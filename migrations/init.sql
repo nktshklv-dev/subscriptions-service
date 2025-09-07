@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT subscriptions_date_range CHECK (end_date IS NULL OR end_date >= start_date)
-    );
+);
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id      ON subscriptions (user_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_service_name ON subscriptions (service_name);

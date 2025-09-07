@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -37,15 +38,13 @@ func main() {
 	}
 	defer db.Close()
 
-	{
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		if err := db.PingContext(ctx); err != nil {
-			logger.Error("db ping failed", "err", err)
-			os.Exit(1)
-		}
-		logger.Info("db connected")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		logger.Error("db ping failed", "err", err)
+		os.Exit(1)
 	}
+	logger.Info("db connected")
 
 	repo := subscriptions.NewRepository(db)
 	subHandler := subscriptions.NewHandler(repo, logger)
@@ -53,7 +52,11 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = fmt.Fprintf(w, "OK")
+
+		if err != nil {
+			logger.Error("health check handler failed to write", "err", err)
+		}
 	})
 	mux.HandleFunc("/health/db", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 1*time.Second)
@@ -63,10 +66,15 @@ func main() {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("db: ok"))
+		_, err = fmt.Fprintf(w, "DB: OK")
+		if err != nil {
+			logger.Error("db health check failed to write", "err", err)
+		}
 	})
+	//
 	mux.Handle("/openapi.yaml", http.FileServer(http.Dir(".")))
 	mux.Handle("/docs/", http.StripPrefix("/docs/", http.FileServer(http.Dir("./swagger-ui"))))
+	//handler mux reg
 	subHandler.RegisterMux(mux)
 
 	srv := &http.Server{
@@ -78,6 +86,7 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
+	//graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -90,6 +99,7 @@ func main() {
 		}
 	}()
 
+	//graceful shutdown
 	<-ctx.Done()
 	logger.Info("shutdown signal received")
 
@@ -98,7 +108,7 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
 	} else {
-		logger.Info("server stopped")
+		logger.Info("server stopped gracefully")
 	}
 }
 

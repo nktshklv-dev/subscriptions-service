@@ -59,7 +59,7 @@ func (in CreateDTO) Validate() (uuid.UUID, string, int, time.Time, *time.Time, e
 	}
 	start, err := ParseMonth(in.Start)
 	if err != nil {
-		return uuid.Nil, "", 0, time.Time{}, nil, errors.New("start must be MM-YYYY")
+		return uuid.Nil, "", 0, time.Time{}, nil, errors.New("month must be MM-YYYY")
 	}
 	var endPtr *time.Time
 	if in.End != nil && *in.End != "" {
